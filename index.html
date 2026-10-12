@@ -75,6 +75,16 @@ button:focus-visible, .drop:focus-visible, input:focus-visible { outline: 2px so
 .sw { width: 18px; height: 10px; border-radius: 2px; display: inline-block; }
 .sw.z { background: var(--zone-fill); border: 1px solid var(--zone); }
 .sw.m { border: 2.5px solid var(--accent); }
+.sw.x { border: 1.5px dotted var(--muted); }
+.zhead { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.zonelist { max-height: 220px; overflow-y: auto; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); }
+.zrow { display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 10px; font-size: .88rem; cursor: pointer; border-bottom: 1px solid var(--line); }
+.zrow:last-child { border-bottom: 0; }
+.zrow input { accent-color: var(--accent); flex: none; }
+.zrow span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.zrow.off span { color: var(--muted); text-decoration: line-through; }
+.zoomto { font-size: .75rem; font-weight: 500; padding: 2px 8px; border-radius: 5px; flex: none; }
+.zbtns button { flex: 1 1 auto; padding: 6px 10px; font-size: .85rem; }
 #map { width: 100%; height: clamp(320px, 62vh, 680px); max-width: 100%; background: var(--grid); z-index: 0; font-family: var(--font-ui); }
 .leaflet-control-layers, .leaflet-bar a { font-family: var(--font-ui); }
 .leaflet-container a.leaflet-popup-close-button { color: #333; }
@@ -104,6 +114,17 @@ button:focus-visible, .drop:focus-visible, input:focus-visible { outline: 2px so
           <span class="filename" id="fname">Example zones loaded</span>
           <input type="file" id="file" accept=".kml,.kmz,application/vnd.google-earth.kml+xml" hidden>
         </label>
+      </div>
+
+      <div class="field">
+        <div class="zhead"><span class="label">Zones to merge</span><span class="hint" id="zonecount"></span></div>
+        <input type="text" id="zfilter" placeholder="Search zones" aria-label="Search zones">
+        <div class="zonelist" id="zonelist"></div>
+        <div class="row zbtns">
+          <button type="button" id="zall">Include all</button>
+          <button type="button" id="znone">Exclude all</button>
+        </div>
+        <p class="hint">Untick a zone, or click it on the map, to leave it out. When searching, the buttons only change the zones shown.</p>
       </div>
 
       <div class="field">
@@ -144,6 +165,7 @@ button:focus-visible, .drop:focus-visible, input:focus-visible { outline: 2px so
       <div class="sheet-head">
         <div class="legend">
           <span><i class="sw z"></i>Original zones</span>
+          <span><i class="sw x"></i>Excluded</span>
           <span><i class="sw m"></i>Merged outline</span>
         </div>
         <span class="badge" id="badge">Example</span>
@@ -226,12 +248,22 @@ function stripHoles(f) {
   return turf.multiPolygon(g.coordinates.map(p => [p[0]]));
 }
 
+let excluded = new Set(); // indices of zones left out of the merge
+const activeZones = () => zones.filter((_, i) => !excluded.has(i));
+const zoneName = i => zones[i].properties.name || `Zone ${i + 1}`;
+
 function doMerge() {
+  updateZoneList();
   if (!zones.length) { merged = null; render(); return; }
+  const active = activeZones();
+  if (!active.length) {
+    merged = null; kmlOut = ""; render();
+    setStatus("Every zone is excluded. Tick at least one zone to merge.", true); return;
+  }
   const gap = Math.max(0, Number($("gap").value) || 0);
   let acc = null, failed = 0;
   const half = gap / 2;
-  for (const z of zones) {
+  for (const z of active) {
     let f = z;
     try {
       if (half > 0) f = turf.buffer(z, half, { units: "meters" });
@@ -246,8 +278,9 @@ function doMerge() {
   buildKML();
   render();
   const n = outlineCount();
-  if (failed) setStatus(`${failed} zone${failed>1?"s":""} had broken geometry and were skipped.`, true);
-  else setStatus(n > 1 ? `Zones form ${n} separate areas. Raise “Close gaps” to join them.` : "Merged into a single outline.");
+  const ex = excluded.size ? ` ${excluded.size} zone${excluded.size > 1 ? "s" : ""} excluded.` : "";
+  if (failed) setStatus(`${failed} zone${failed>1?"s":""} had broken geometry and were skipped.${ex}`, true);
+  else setStatus((n > 1 ? `Zones form ${n} separate areas. Raise “Close gaps” to join them.` : "Merged into a single outline.") + ex);
 }
 
 function outlineCount() {
@@ -274,8 +307,8 @@ function buildKML() {
   const geom = polys.length === 1 ? polyKML(polys[0]) : `<MultiGeometry>${polys.map(polyKML).join("")}</MultiGeometry>`;
   let originals = "";
   if ($("keep").checked) {
-    originals = `<Folder><name>Original zones</name><visibility>0</visibility>` + zones.map((z, i) =>
-      `<Placemark><name>${esc(z.properties.name || "Zone " + (i+1))}</name><styleUrl>#orig</styleUrl>${polyKML(z.geometry.coordinates)}</Placemark>`).join("") + `</Folder>`;
+    originals = `<Folder><name>Original zones</name><visibility>0</visibility>` + zones.map((z, i) => excluded.has(i) ? "" :
+      `<Placemark><name>${esc(zoneName(i))}</name><styleUrl>#orig</styleUrl>${polyKML(z.geometry.coordinates)}</Placemark>`).join("") + `</Folder>`;
   }
   kmlOut = `<?xml version="1.0" encoding="UTF-8"?>
 <kml xmlns="http://www.opengis.net/kml/2.2"><Document><name>${esc(name)}</name>
@@ -313,7 +346,7 @@ let needFit = true;
 const toLatLngs = rings => rings.map(r => r.map(([x, y]) => [y, x]));
 
 function render() {
-  $("sIn").textContent = zones.length || "–";
+  $("sIn").textContent = zones.length ? (excluded.size ? `${zones.length - excluded.size} of ${zones.length}` : zones.length) : "–";
   $("sOut").textContent = merged ? outlineCount() : "–";
   if (merged) {
     $("sArea").textContent = fmtArea(turf.area(merged));
@@ -322,9 +355,13 @@ function render() {
   zonesLayer.clearLayers(); mergedLayer.clearLayers();
   if (!zones.length) return;
   zones.forEach((z, i) => {
-    L.polygon(toLatLngs(z.geometry.coordinates), {
-      color: "#2f6b5c", weight: 1.5, dashArray: "6 4", fillColor: "#3b7a6a", fillOpacity: 0.18
-    }).bindTooltip(z.properties.name || `Zone ${i + 1}`, { sticky: true }).addTo(zonesLayer);
+    const off = excluded.has(i);
+    L.polygon(toLatLngs(z.geometry.coordinates), off
+      ? { color: "#8a8f8c", weight: 1.5, dashArray: "2 5", fillColor: "#8a8f8c", fillOpacity: 0.08 }
+      : { color: "#2f6b5c", weight: 1.5, dashArray: "6 4", fillColor: "#3b7a6a", fillOpacity: 0.18 })
+      .bindTooltip(`${esc(zoneName(i))}<br><small>${off ? "Excluded · click to include" : "Click to exclude"}</small>`, { sticky: true })
+      .on("click", () => toggleZone(i))
+      .addTo(zonesLayer);
   });
   if (merged) {
     const polys = merged.geometry.type === "Polygon" ? [merged.geometry.coordinates] : merged.geometry.coordinates;
@@ -345,6 +382,8 @@ function render() {
 async function loadText(text, label, example) {
   try {
     zones = parseKML(text);
+    excluded = new Set();
+    $("zfilter").value = "";
     isExample = example;
     needFit = true;
     $("fname").textContent = label;
@@ -354,6 +393,51 @@ async function loadText(text, label, example) {
     doMerge();
   } catch (e) { setStatus(e.message || "Couldn't read that file.", true); }
 }
+
+// ---- Zone list (include / exclude) ----
+function toggleZone(i, on) {
+  const include = on === undefined ? excluded.has(i) : on;
+  if (include) excluded.delete(i); else excluded.add(i);
+  doMerge();
+}
+function updateZoneList() {
+  const box = $("zonelist");
+  $("zonecount").textContent = zones.length ? `${zones.length - excluded.size} of ${zones.length} included` : "";
+  const q = $("zfilter").value.trim().toLowerCase();
+  const focused = document.activeElement && /^z\d+$/.test(document.activeElement.id) ? document.activeElement.id : null;
+  const scroll = box.scrollTop;
+  box.replaceChildren();
+  zones.forEach((z, i) => {
+    const name = zoneName(i);
+    if (q && !name.toLowerCase().includes(q)) return;
+    const row = document.createElement("label");
+    row.className = "zrow" + (excluded.has(i) ? " off" : "");
+    const cb = document.createElement("input");
+    cb.type = "checkbox"; cb.id = "z" + i; cb.checked = !excluded.has(i);
+    cb.addEventListener("change", () => toggleZone(i, cb.checked));
+    const span = document.createElement("span"); span.textContent = name;
+    const zoom = document.createElement("button");
+    zoom.type = "button"; zoom.className = "zoomto"; zoom.textContent = "Show"; zoom.title = "Zoom to " + name;
+    zoom.addEventListener("click", e => { e.preventDefault(); map.fitBounds(L.polygon(toLatLngs(z.geometry.coordinates)).getBounds(), { padding: [40, 40], maxZoom: 18 }); });
+    row.append(cb, span, zoom);
+    box.appendChild(row);
+  });
+  if (!box.children.length) {
+    const p = document.createElement("p"); p.className = "hint"; p.style.padding = "8px 10px";
+    p.textContent = zones.length ? "No zones match that search." : "No zones loaded.";
+    box.appendChild(p);
+  }
+  box.scrollTop = scroll;
+  if (focused && $(focused)) $(focused).focus();
+}
+$("zfilter").addEventListener("input", updateZoneList);
+function setAllVisible(on) {
+  const q = $("zfilter").value.trim().toLowerCase();
+  zones.forEach((_, i) => { if (!q || zoneName(i).toLowerCase().includes(q)) { if (on) excluded.delete(i); else excluded.add(i); } });
+  doMerge();
+}
+$("zall").addEventListener("click", () => setAllVisible(true));
+$("znone").addEventListener("click", () => setAllVisible(false));
 
 async function handleFile(file) {
   if (!file) return;

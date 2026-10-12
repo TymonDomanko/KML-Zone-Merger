@@ -17,9 +17,10 @@ Your file is processed entirely in the browser. Nothing is uploaded.
 
 | Option | What it does |
 | --- | --- |
+| Zones to merge | Untick a zone in the list, or click it on the map, to leave it out of the merge. Search by name, zoom to a zone, or include/exclude all at once. Excluded zones show greyed out on the map. |
 | Close gaps up to (metres) | Zones that don't quite touch stay as separate outlines. Set this to join zones within that distance of each other. `0` merges only zones that touch or overlap. |
 | Fill in holes | Removes any holes left inside the merged area. |
-| Keep the original zones | Adds the original zones to the output file in a hidden folder. |
+| Keep the original zones | Adds the original (included) zones to the output file in a hidden folder. |
 | Outline style | Line colour, line width and an optional light fill. |
 
 Only polygons are merged. Lines and pins in the file are ignored.
