@@ -75,7 +75,9 @@ button:focus-visible, .drop:focus-visible, input:focus-visible { outline: 2px so
 .sw { width: 18px; height: 10px; border-radius: 2px; display: inline-block; }
 .sw.z { background: var(--zone-fill); border: 1px solid var(--zone); }
 .sw.m { border: 2.5px solid var(--accent); }
-canvas { width: 100%; aspect-ratio: 4 / 3; max-width: 100%; display: block; background: var(--panel); }
+#map { width: 100%; height: clamp(320px, 62vh, 680px); max-width: 100%; background: var(--grid); z-index: 0; font-family: var(--font-ui); }
+.leaflet-control-layers, .leaflet-bar a { font-family: var(--font-ui); }
+.leaflet-container a.leaflet-popup-close-button { color: #333; }
 .stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-top: 1px solid var(--line); }
 @media (max-width: 520px) { .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .stat { padding: 12px 16px; border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 2px; }
@@ -146,7 +148,7 @@ canvas { width: 100%; aspect-ratio: 4 / 3; max-width: 100%; display: block; back
         </div>
         <span class="badge" id="badge">Example</span>
       </div>
-      <canvas id="cv" width="1200" height="900"></canvas>
+      <div id="map" role="img" aria-label="Map of the zones and merged outline"></div>
       <div class="stats">
         <div class="stat"><span class="label">Zones in</span><b id="sIn">–</b></div>
         <div class="stat"><span class="label">Outlines out</span><b id="sOut">–</b></div>
@@ -157,6 +159,8 @@ canvas { width: 100%; aspect-ratio: 4 / 3; max-width: 100%; display: block; back
   </div>
 </div>
 
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Turf.js/6.5.0/turf.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script>
@@ -286,43 +290,55 @@ function fmtLen(m) { return m >= 1000 ? (m/1000).toFixed(2) + " km" : Math.round
 
 function cssVar(n) { return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); }
 
+// ---- Map with basemap ----
+const map = L.map("map", { zoomControl: true, attributionControl: true }).setView([-33.868, 151.21], 14);
+const basemaps = {
+  "Streets": L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+  }),
+  "Satellite": L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
+    maxZoom: 19, attribution: 'Imagery &copy; Esri, Maxar, Earthstar Geographics'
+  })
+};
+let startBase = "Streets";
+try { const b = localStorage.getItem("kzm-basemap"); if (b && basemaps[b]) startBase = b; } catch (e) {}
+basemaps[startBase].addTo(map);
+L.control.layers(basemaps, null, { position: "topright" }).addTo(map);
+map.on("baselayerchange", e => { try { localStorage.setItem("kzm-basemap", e.name); } catch (_) {} });
+L.control.scale({ metric: true, imperial: false }).addTo(map);
+const zonesLayer = L.layerGroup().addTo(map);
+const mergedLayer = L.layerGroup().addTo(map);
+let needFit = true;
+
+const toLatLngs = rings => rings.map(r => r.map(([x, y]) => [y, x]));
+
 function render() {
-  const cv = $("cv"), ctx = cv.getContext("2d");
-  const W = cv.width, H = cv.height;
-  ctx.fillStyle = cssVar("--panel"); ctx.fillRect(0, 0, W, H);
   $("sIn").textContent = zones.length || "–";
   $("sOut").textContent = merged ? outlineCount() : "–";
   if (merged) {
     $("sArea").textContent = fmtArea(turf.area(merged));
     $("sPer").textContent = fmtLen(turf.length(turf.polygonToLine(merged), { units: "kilometers" }) * 1000);
   } else { $("sArea").textContent = $("sPer").textContent = "–"; }
-  if (!zones.length) {
-    ctx.fillStyle = cssVar("--muted"); ctx.font = "28px " + cssVar("--font-ui");
-    ctx.textAlign = "center"; ctx.fillText("No polygons found in that file", W/2, H/2); return;
-  }
-  const all = turf.featureCollection(merged ? zones.concat([merged]) : zones);
-  const [minX, minY, maxX, maxY] = turf.bbox(all);
-  const kx = Math.cos(((minY + maxY) / 2) * Math.PI / 180);
-  const pad = 60;
-  const sx = (W - pad*2) / Math.max((maxX - minX) * kx, 1e-9);
-  const sy = (H - pad*2) / Math.max(maxY - minY, 1e-9);
-  const s = Math.min(sx, sy);
-  const ox = (W - (maxX - minX) * kx * s) / 2, oy = (H - (maxY - minY) * s) / 2;
-  const P = ([x, y]) => [ox + (x - minX) * kx * s, H - oy - (y - minY) * s];
-
-  // faint grid
-  ctx.strokeStyle = cssVar("--grid"); ctx.lineWidth = 1;
-  for (let x = 0; x <= W; x += 60) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); }
-  for (let y = 0; y <= H; y += 60) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
-
-  const path = rings => { ctx.beginPath(); rings.forEach(r => r.forEach((p, i) => { const [a, b] = P(p); i ? ctx.lineTo(a, b) : ctx.moveTo(a, b); })); };
-  ctx.fillStyle = cssVar("--zone-fill"); ctx.strokeStyle = cssVar("--zone"); ctx.lineWidth = 1.5; ctx.setLineDash([6, 4]);
-  zones.forEach(z => { path(z.geometry.coordinates); ctx.fill("evenodd"); ctx.stroke(); });
-  ctx.setLineDash([]);
+  zonesLayer.clearLayers(); mergedLayer.clearLayers();
+  if (!zones.length) return;
+  zones.forEach((z, i) => {
+    L.polygon(toLatLngs(z.geometry.coordinates), {
+      color: "#2f6b5c", weight: 1.5, dashArray: "6 4", fillColor: "#3b7a6a", fillOpacity: 0.18
+    }).bindTooltip(z.properties.name || `Zone ${i + 1}`, { sticky: true }).addTo(zonesLayer);
+  });
   if (merged) {
     const polys = merged.geometry.type === "Polygon" ? [merged.geometry.coordinates] : merged.geometry.coordinates;
-    ctx.strokeStyle = $("color").value; ctx.lineWidth = 2 + (Number($("width").value) || 3); ctx.lineJoin = "round";
-    polys.forEach(p => { path(p); ctx.stroke(); });
+    const w = Number($("width").value) || 3;
+    polys.forEach(p => {
+      // white casing so the outline stays visible on satellite imagery
+      L.polygon(toLatLngs(p), { color: "#ffffff", weight: w + 4, opacity: 0.85, fill: false, interactive: false }).addTo(mergedLayer);
+      L.polygon(toLatLngs(p), { color: $("color").value, weight: w + 1, lineJoin: "round", fill: $("fill").checked, fillColor: $("color").value, fillOpacity: 0.15, interactive: false }).addTo(mergedLayer);
+    });
+  }
+  if (needFit) {
+    const b = L.featureGroup([...zonesLayer.getLayers(), ...mergedLayer.getLayers()]).getBounds();
+    if (b.isValid()) map.fitBounds(b, { padding: [30, 30] });
+    needFit = false;
   }
 }
 
@@ -330,6 +346,7 @@ async function loadText(text, label, example) {
   try {
     zones = parseKML(text);
     isExample = example;
+    needFit = true;
     $("fname").textContent = label;
     $("badge").textContent = example ? "Example" : `${zones.length} zone${zones.length === 1 ? "" : "s"}`;
     if (!example) $("outname").value = label.replace(/\.(kml|kmz)$/i, "") + "-merged";
@@ -387,8 +404,6 @@ $("savejson").addEventListener("click", () => {
 
 
 
-if (window.matchMedia) matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", render);
-new MutationObserver(render).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
 
 loadText(SAMPLE, "Example zones loaded", true);
 </script>

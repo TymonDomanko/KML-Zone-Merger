@@ -7,7 +7,7 @@ Merge every polygon zone in a KML or KMZ file into one outline, right in your br
 ## What it does
 
 - Opens a `.kml` or `.kmz` (drag and drop or choose a file)
-- Merges all polygons into a single outline, with a preview of the original zones underneath
+- Merges all polygons into a single outline, shown on a street or satellite map with the original zones underneath
 - Shows the merged area and perimeter
 - Downloads the result as `.kml`, `.kmz` or GeoJSON, ready for Google Earth or Google My Maps
 
@@ -26,7 +26,7 @@ Only polygons are merged. Lines and pins in the file are ignored.
 
 ## Running it yourself
 
-It's a single `index.html` with no build step. Open it in a browser, or host it anywhere that serves static files. It loads [Turf.js](https://turfjs.org/) and [JSZip](https://stuk.github.io/jszip/) from cdnjs.
+It's a single `index.html` with no build step. Open it in a browser, or host it anywhere that serves static files. It loads [Leaflet](https://leafletjs.com/), [Turf.js](https://turfjs.org/) and [JSZip](https://stuk.github.io/jszip/) from cdnjs. Map tiles come from OpenStreetMap (streets) and Esri World Imagery (satellite).
 
 ## License
 
